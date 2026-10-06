@@ -1,5 +1,6 @@
 import {
 	PanelTop,
+	Keyboard,
 	Calendar,
 	BellRing,
 	Music,
@@ -24,6 +25,8 @@ interface NotchTabProps {
 	toggleCalendar: () => void;
 	timerSoundEnabled: boolean;
 	toggleTimerSound: () => void;
+	keycastEnabled: boolean;
+	toggleKeycast: () => void;
 	musicModeEnabled: boolean;
 	toggleMusicMode: () => void;
 	musicCompactNotch: boolean;
@@ -63,6 +66,8 @@ export function NotchTab({
 	toggleCalendar,
 	timerSoundEnabled,
 	toggleTimerSound,
+	keycastEnabled,
+	toggleKeycast,
 	musicModeEnabled,
 	toggleMusicMode,
 	musicCompactNotch,
@@ -144,6 +149,17 @@ export function NotchTab({
 						</label>
 					</SettingRow>
 				)}
+
+				<SettingRow
+					icon={Keyboard}
+					label="Keystroke Display"
+					desc="Show keys you type on the notch, beside the clock"
+				>
+					<label className="toggle-switch">
+						<input type="checkbox" checked={keycastEnabled} onChange={toggleKeycast} />
+						<span className="slider"></span>
+					</label>
+				</SettingRow>
 
 				<SettingRow icon={Music} label="Music Mode" desc="Interactive live music widget">
 					<label className="toggle-switch">

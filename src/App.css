@@ -358,6 +358,60 @@ img {
 	/* Optical adjustment for Inter font baseline */
 }
 
+/* Keystroke view: clock left, Kbd group right, both inside the notch. */
+.keycast-row {
+	justify-content: space-between;
+	gap: 12px;
+	padding: 0 4px;
+}
+
+.keycast-clock {
+	font-size: 13px;
+	font-weight: 500;
+	letter-spacing: 0.3px;
+	line-height: 1;
+	color: var(--bloom-text, white);
+	white-space: nowrap;
+	flex-shrink: 0;
+}
+
+/* Fixed-width keyboard area: width set inline from KEYCAST_AREA_WIDTH. Keys are
+   right-anchored (flex-end) so the right edge stays put and combos grow leftward
+   without resizing the notch. overflow:hidden keeps a rare 4+ key combo inside
+   the black notch. */
+.keycast {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 4px;
+	white-space: nowrap;
+	flex-shrink: 0;
+	overflow: hidden;
+	pointer-events: none;
+	box-sizing: border-box;
+	padding-right: 2px;
+}
+
+/* Compact shadcn-style keycap: square-ish for single chars, tight padding. */
+.kbd {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 18px;
+	height: 18px;
+	padding: 0 4px;
+	border-radius: 5px;
+	font-size: 11px;
+	font-weight: 600;
+	line-height: 1;
+	font-family: inherit;
+	color: var(--bloom-text, white);
+	background: rgba(255, 255, 255, 0.12);
+	border: 1px solid rgba(255, 255, 255, 0.18);
+	border-bottom-width: 2px;
+	box-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
+}
+
 .update-dot {
 	position: absolute;
 	top: 100%;

@@ -26,6 +26,9 @@ export function useSettings() {
 		() => localStorage.getItem("bloom-timer-sound-enabled") !== "false"
 	);
 	const [musicModeEnabled, setMusicModeEnabled] = useState(true);
+	const [keycastEnabled, setKeycastEnabled] = useState(
+		() => localStorage.getItem("bloom-keycast-enabled") === "true"
+	);
 	const [musicCompactNotch, setMusicCompactNotch] = useState(true);
 	const [volumeOverlayEnabled, setVolumeOverlayEnabled] = useState(true);
 	const [volumeEdgeEnabled, setVolumeEdgeEnabled] = useState(
@@ -145,6 +148,7 @@ export function useSettings() {
 			apply(getVal("bloom-weather-enabled"), setWeatherEnabled, readBool);
 			apply(getVal("bloom-calendar-enabled"), setCalendarEnabled, readBool);
 			apply(getVal("bloom-timer-sound-enabled"), setTimerSoundEnabled, readBool);
+			apply(getVal("bloom-keycast-enabled"), setKeycastEnabled, readBool);
 			apply(getVal("bloom-music-mode-enabled"), setMusicModeEnabled, readBool);
 			apply(getVal("bloom-music-compact-notch"), setMusicCompactNotch, readBool);
 			apply(getVal("bloom-volume-overlay-enabled"), setVolumeOverlayEnabled, readBool);
@@ -224,6 +228,7 @@ export function useSettings() {
 		"bloom-weather-enabled": setWeatherEnabled,
 		"bloom-calendar-enabled": setCalendarEnabled,
 		"bloom-timer-sound-enabled": setTimerSoundEnabled,
+		"bloom-keycast-enabled": setKeycastEnabled,
 		"bloom-music-mode-enabled": setMusicModeEnabled,
 		"bloom-music-compact-notch": setMusicCompactNotch,
 		"bloom-media-ambience-enabled": setMediaAmbienceEnabled,
@@ -386,6 +391,12 @@ export function useSettings() {
 		const next = !timerSoundEnabled;
 		setTimerSoundEnabled(next);
 		saveSetting("bloom-timer-sound-enabled", String(next));
+	};
+
+	const toggleKeycast = () => {
+		const next = !keycastEnabled;
+		setKeycastEnabled(next);
+		saveSetting("bloom-keycast-enabled", String(next));
 	};
 
 	const toggleMusicMode = () => {
@@ -747,6 +758,8 @@ export function useSettings() {
 		toggleCalendar,
 		timerSoundEnabled,
 		toggleTimerSound,
+		keycastEnabled,
+		toggleKeycast,
 		musicModeEnabled,
 		toggleMusicMode,
 		musicCompactNotch,

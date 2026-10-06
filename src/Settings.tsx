@@ -167,6 +167,8 @@ function SettingsApp() {
 							toggleCalendar={settings.toggleCalendar}
 							timerSoundEnabled={settings.timerSoundEnabled}
 							toggleTimerSound={settings.toggleTimerSound}
+							keycastEnabled={settings.keycastEnabled}
+							toggleKeycast={settings.toggleKeycast}
 							musicModeEnabled={settings.musicModeEnabled}
 							toggleMusicMode={settings.toggleMusicMode}
 							musicCompactNotch={settings.musicCompactNotch}

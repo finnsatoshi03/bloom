@@ -141,6 +141,165 @@ fn emit_dock_win_number(index: u8) {
     });
 }
 
+/// One key event sent to the notch's keystroke visualizer. `label` is the
+/// printable glyph / named key for a non-modifier (None for a modifier key),
+/// and `mods` is the set of modifiers held at the moment of the event.
+#[derive(Clone, serde::Serialize)]
+struct KeycastEvent {
+    label: Option<String>,
+    mods: Vec<String>,
+    is_modifier: bool,
+    is_down: bool,
+}
+
+/// Keys worth visualizing: everything except lock keys and the
+/// media/volume/browser/brightness keys. Letters, digits, symbols,
+/// navigation and the modifiers all pass.
+fn is_keycast_key(vk: u16) -> bool {
+    !matches!(vk, 0x14 | 0x90 | 0x91 | 0xA6..=0xB7 | 0x216 | 0x217)
+}
+
+/// Whether `vk` is a modifier (Ctrl/Alt/Shift/Win, either side).
+fn is_modifier_vk(vk: u16) -> bool {
+    matches!(vk, 0x10..=0x12 | 0x5B | 0x5C | 0xA0..=0xA5)
+}
+
+/// Whether the keystroke display is turned on in Settings. Default off: showing
+/// typed keys on screen is opt-in, since it is visible over any app.
+fn keycast_enabled() -> bool {
+    KEYBOARD_HOOK_APP_HANDLE.get().is_some_and(|app| {
+        crate::utils::get_setting_str(app, "bloom-keycast-enabled")
+            .map(|v| v == "true")
+            .unwrap_or(false)
+    })
+}
+
+/// The modifiers currently held, in a stable display order (Ctrl, Alt, Win,
+/// Shift). The current event's own key is resolved from `cur_down` rather than
+/// a physical read, which can lag for the key being pressed/released.
+fn held_modifiers(cur_vk: u16, cur_down: bool) -> Vec<String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+    let phys = |v: u16| unsafe { (GetAsyncKeyState(v as i32) as u16 & 0x8000) != 0 };
+    let grp = |vks: &[u16]| -> bool {
+        if vks.contains(&cur_vk) {
+            cur_down
+        } else {
+            vks.iter().any(|&v| phys(v))
+        }
+    };
+    let mut v = Vec::new();
+    if grp(&[0x11, 0xA2, 0xA3]) {
+        v.push("Ctrl".into());
+    }
+    if grp(&[0x12, 0xA4, 0xA5]) {
+        v.push("Alt".into());
+    }
+    if grp(&[0x5B, 0x5C]) {
+        v.push("Win".into());
+    }
+    if grp(&[0x10, 0xA0, 0xA1]) {
+        v.push("Shift".into());
+    }
+    v
+}
+
+/// Named label for a non-printing key, or None for keys with no useful glyph.
+fn named_key(vk: u16) -> Option<&'static str> {
+    use windows::Win32::UI::Input::KeyboardAndMouse as k;
+    Some(match k::VIRTUAL_KEY(vk) {
+        k::VK_RETURN => "Enter",
+        k::VK_TAB => "Tab",
+        k::VK_BACK => "Backspace",
+        k::VK_ESCAPE => "Esc",
+        k::VK_DELETE => "Delete",
+        k::VK_LEFT => "←",
+        k::VK_RIGHT => "→",
+        k::VK_UP => "↑",
+        k::VK_DOWN => "↓",
+        k::VK_HOME => "Home",
+        k::VK_END => "End",
+        k::VK_PRIOR => "PgUp",
+        k::VK_NEXT => "PgDn",
+        _ => return None,
+    })
+}
+
+/// The keycap label for a non-modifier key: the real character for the active
+/// keyboard layout (respecting Shift/Caps/AltGr), uppercased like a keycap, or
+/// a named label for navigation/edit keys. Plain Ctrl is masked out so a
+/// shortcut shows the base letter (Ctrl+C → "C"), not a control character.
+fn key_label(vk: u16, scan: u32) -> Option<String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, GetKeyState, GetKeyboardLayout, ToUnicodeEx, VIRTUAL_KEY, VK_CAPITAL,
+        VK_CONTROL, VK_MENU, VK_SHIFT,
+    };
+    let down = |v: VIRTUAL_KEY| unsafe { (GetAsyncKeyState(v.0 as i32) as u16 & 0x8000) != 0 };
+    let shift = down(VK_SHIFT);
+    let altgr = down(VK_CONTROL) && down(VK_MENU);
+    let caps = (unsafe { GetKeyState(VK_CAPITAL.0 as i32) } & 1) != 0;
+
+    let mut state = [0u8; 256];
+    if shift {
+        state[VK_SHIFT.0 as usize] = 0x80;
+    }
+    if caps {
+        state[VK_CAPITAL.0 as usize] = 0x01;
+    }
+    // AltGr (Ctrl+Alt) resolves layout symbols; plain Ctrl is left out so the
+    // base letter comes through.
+    if altgr {
+        state[VK_CONTROL.0 as usize] = 0x80;
+        state[VK_MENU.0 as usize] = 0x80;
+    }
+    let layout = unsafe { GetKeyboardLayout(0) };
+    let mut buf = [0u16; 8];
+    // flags bit 2 keeps the call from mutating the real dead-key state.
+    let n = unsafe { ToUnicodeEx(vk as u32, scan, &state, &mut buf, 4, Some(layout)) };
+    if n > 0 {
+        let s = String::from_utf16_lossy(&buf[..n as usize]);
+        if s == " " {
+            return Some("Space".into());
+        }
+        if !s.is_empty() && s.chars().all(|c| !c.is_control()) {
+            return Some(s.to_uppercase());
+        }
+    }
+    named_key(vk).map(|s| s.to_string())
+}
+
+/// Sends one key event to the notch's visualizer. Regular keys are sent on
+/// key-down only; modifiers on both edges so a held combo stays accurate.
+/// Observational — it never consumes the event or alters input to Windows.
+fn emit_keycast(vk: u16, scan: u32, is_down: bool) {
+    if !keycast_enabled() {
+        return;
+    }
+    let is_modifier = is_modifier_vk(vk);
+    if !is_modifier && !is_down {
+        return;
+    }
+    let label = if is_modifier {
+        None
+    } else {
+        match key_label(vk, scan) {
+            Some(l) => Some(l),
+            None => return,
+        }
+    };
+    let Some(app) = KEYBOARD_HOOK_APP_HANDLE.get().cloned() else {
+        return;
+    };
+    let ev = KeycastEvent {
+        label,
+        mods: held_modifiers(vk, is_down),
+        is_modifier,
+        is_down,
+    };
+    tauri::async_runtime::spawn(async move {
+        let _ = app.emit_to("main", "keycast", ev);
+    });
+}
+
 unsafe extern "system" fn keyboard_hook_proc(
     code: i32,
     wparam: windows::Win32::Foundation::WPARAM,
@@ -157,6 +316,10 @@ unsafe extern "system" fn keyboard_hook_proc(
         let vk_code = VIRTUAL_KEY(kb.vkCode as u16);
         let is_down = wparam.0 == WM_KEYDOWN as usize || wparam.0 == WM_SYSKEYDOWN as usize;
         let is_up = wparam.0 == WM_KEYUP as usize || wparam.0 == WM_SYSKEYUP as usize;
+
+        if (kb.flags.0 & LLKHF_INJECTED.0) == 0 && is_keycast_key(vk_code.0) {
+            emit_keycast(vk_code.0, kb.scanCode, is_down);
+        }
 
         // Only physical presses drive the Win+Number replacement; injected
         // events (our own Start taps and mask key) must not re-enter it.
@@ -3919,7 +4082,21 @@ fn recover_from_webview_failure(handle: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{notch_mode_reserves_work_area, win_number_index};
+    use super::{is_keycast_key, is_modifier_vk, notch_mode_reserves_work_area, win_number_index};
+
+    #[test]
+    fn keycast_includes_keys_and_modifiers_but_not_media() {
+        assert!(is_keycast_key(0x41)); // A
+        assert!(is_keycast_key(0x0D)); // Enter
+        assert!(is_keycast_key(0x10)); // Shift (a modifier, still visualized)
+        assert!(is_keycast_key(0x5B)); // LWin
+        assert!(!is_keycast_key(0xAF)); // Volume up
+        assert!(!is_keycast_key(0x90)); // NumLock
+
+        assert!(is_modifier_vk(0x11)); // Ctrl
+        assert!(is_modifier_vk(0xA0)); // LShift
+        assert!(!is_modifier_vk(0x41)); // A is not a modifier
+    }
 
     #[test]
     fn win_number_maps_top_row_digits_only() {

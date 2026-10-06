@@ -41,6 +41,29 @@ import {
 // Pomodoro timer limit.
 const MAX_TIMER_SECONDS = 180 * 60;
 
+// Keystroke visualizer: compact symbols for the verbose labels the backend
+// emits, so a special key is a single glyph ("Backspace" → "⌫") instead of a
+// wide word. Anything not listed (letters, digits, modifiers, arrows) is shown
+// as-is. Centralized here so the keycap rendering stays a single lookup.
+const KEYCAST_LABELS: Record<string, string> = {
+	Backspace: "⌫",
+	Enter: "↵",
+	Return: "↵",
+	Tab: "Tab", // Inter lacks the ⇥ glyph (renders as tofu), so use the word
+	Space: "␣",
+	Escape: "Esc"
+};
+
+// Reserved width (px) of the keyboard area to the right of the clock. Sized for
+// a comfortable 3-key compact shortcut like [Ctrl][Shift][S] at the keycap
+// styles in App.css (height 18, ~4px gaps). The notch holds ONE keycast width
+// regardless of how many keys show, so it never "breathes" between combos.
+const KEYCAST_AREA_WIDTH = 124;
+// Outer notch width in keycast mode: 12px padding + clock (~70) + area + 12px.
+const KEYCAST_NOTCH_WIDTH = 12 + 70 + KEYCAST_AREA_WIDTH + 12;
+
+const keycastLabel = (raw: string): string => KEYCAST_LABELS[raw] ?? raw;
+
 // Inline timer editing: digits fill from the right and the colon is inserted
 // automatically ("130" -> 1:30, "2500" -> 25:00, "45" -> 0:45).
 const timerDigitsToSeconds = (digits: string): number | null => {
@@ -473,7 +496,8 @@ function App() {
 	useEffect(() => {
 		if (isReady && prevChargingRef.current !== null && prevChargingRef.current !== isCharging) {
 			setShowPowerPulse(true);
-			if (notchMode === "peek") triggerEventPeek(4000);
+			// Reveal on charge in any auto-hiding mode (smart + peek), not peek only.
+			if (notchMode !== "fixed") triggerEventPeek(4000);
 			if (powerPulseTimeoutRef.current) clearTimeout(powerPulseTimeoutRef.current);
 			powerPulseTimeoutRef.current = setTimeout(() => {
 				setShowPowerPulse(false);
@@ -491,7 +515,7 @@ function App() {
 			!lowBatteryPulseShownRef.current
 		) {
 			setShowLowBatteryPulse(true);
-			if (notchMode === "peek") triggerEventPeek(5000);
+			if (notchMode !== "fixed") triggerEventPeek(5000);
 			lowBatteryPulseShownRef.current = true;
 			setTimeout(() => setShowLowBatteryPulse(false), 5000);
 		}
@@ -564,7 +588,7 @@ function App() {
 				return;
 			}
 			setShowUpdatePulse(true);
-			if (notchMode === "peek") triggerEventPeek(6000);
+			if (notchMode !== "fixed") triggerEventPeek(6000);
 			if (updatePulseTimerRef.current) clearTimeout(updatePulseTimerRef.current);
 			updatePulseTimerRef.current = setTimeout(() => {
 				setShowUpdatePulse(false);
@@ -624,11 +648,21 @@ function App() {
 	const dockModeInitial = useRef(true);
 	const notchModeInitial = useRef(true);
 
+	// Latest keystroke shown by the visualizer (see the "keycast" listener).
+	const [keycast, setKeycast] = useState<{ mods: string[]; key: string | null } | null>(null);
+	const isKeycasting =
+		keycast !== null && (keycast.key !== null || keycast.mods.length > 0);
+
 	const isAnyInteraction = isHovered || isNotchHovered || isEdgeHovered;
+	// Keyboard activity temporarily reveals the notch: in smart/peek mode a
+	// keystroke overrides the hide rule the same way a hover or peek event does,
+	// then the keycast hide-timer clears and the notch returns to normal.
 	const isHidden =
 		!startupAnimating &&
+		!isKeycasting &&
+		!eventPeek &&
 		((notchMode === "smart" && isOverlapped && interactionState === "none") ||
-			(notchMode === "peek" && interactionState === "none" && !eventPeek));
+			(notchMode === "peek" && interactionState === "none"));
 
 	useEffect(() => {
 		if (isAnyInteraction) {
@@ -1422,6 +1456,39 @@ function App() {
 		initBattery();
 	}, []);
 
+	// Keystroke visualizer: the backend sends one structured event per key
+	// (label + currently-held modifiers + down/up). We show the LATEST key, not
+	// an accumulated string — each printable keydown replaces the previous one.
+	// Shortcuts show the held modifiers alongside the key as a Kbd group.
+	useEffect(() => {
+		let hideTimer: ReturnType<typeof setTimeout> | undefined;
+		const unlisten = listen<{
+			label: string | null;
+			mods: string[];
+			is_modifier: boolean;
+			is_down: boolean;
+		}>("keycast", (event) => {
+			const { label, mods, is_modifier, is_down } = event.payload;
+			if (is_down && !is_modifier) {
+				// A real key: show it, with any modifiers held at the time.
+				setKeycast({ mods, key: label });
+			} else {
+				// Modifier down/up: reflect the currently-held modifier set. When
+				// the last modifier releases we keep the previous view and let the
+				// hide timer clear it, so a released combo stays briefly visible.
+				setKeycast((prev) =>
+					mods.length > 0 ? { mods, key: is_down ? null : (prev?.key ?? null) } : prev
+				);
+			}
+			clearTimeout(hideTimer);
+			hideTimer = setTimeout(() => setKeycast(null), 1200);
+		});
+		return () => {
+			clearTimeout(hideTimer);
+			unlisten.then((fn) => fn());
+		};
+	}, []);
+
 	// Listen for Volume Changes
 	useEffect(() => {
 		const unlisten = listen<{ volume: number; is_muted: boolean }>("volume-change", (event) => {
@@ -1865,7 +1932,20 @@ function App() {
 	const isMusicMode = mediaInfo.has_media && bloomMode === "music" && settingsMusicModeEnabled;
 
 	// Calculate width dynamically based on enabled features
+	// The keycaps currently shown: held modifiers, then the key (if any),
+	// each mapped to its compact display label.
+	const keycastCaps =
+		isKeycasting && keycast
+			? [...keycast.mods, ...(keycast.key !== null ? [keycast.key] : [])].map(keycastLabel)
+			: [];
+
 	const getDynamicWidth = () => {
+		// Keystroke visualizer uses ONE fixed width so the notch doesn't resize
+		// between 1-, 2-, and 3-key combos. The reserved keyboard area centers
+		// whatever keys are shown; only entering/leaving keycast morphs the notch.
+		if (keycastCaps.length > 0 && !isHovered && !isCalendarMode) {
+			return KEYCAST_NOTCH_WIDTH;
+		}
 		if (bloomMode === "announcement" && announcement && !announcementDismissed) return 380;
 		if (isCalendarMode) return 480;
 		if (bloomMode === "command-center" && isHovered) return 350;
@@ -2337,7 +2417,25 @@ function App() {
 										>
 											<div className="main-row">
 												<AnimatePresence mode="wait">
-													{(showPowerPulse || showLowBatteryPulse || showUpdatePulse) &&
+													{isKeycasting && !isHovered && keycastCaps.length > 0 ? (
+														<motion.div
+															key="keycast-view"
+															className="main-row-inner keycast-row"
+															initial={{ opacity: 0 }}
+															animate={{ opacity: 1 }}
+															exit={{ opacity: 0, transition: { duration: 0.05 } }}
+															transition={{ duration: 0.15 }}
+														>
+															<span className="keycast-clock">{time}</span>
+															<div className="keycast" style={{ width: KEYCAST_AREA_WIDTH }}>
+																	{keycastCaps.map((cap, i) => (
+																		<kbd className="kbd" key={`${i}-${cap}`}>
+																			{cap}
+																		</kbd>
+																	))}
+																</div>
+														</motion.div>
+													) : (showPowerPulse || showLowBatteryPulse || showUpdatePulse) &&
 													!isHovered ? (
 														showUpdatePulse ? (
 															<motion.div
